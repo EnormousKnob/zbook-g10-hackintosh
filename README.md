@@ -26,13 +26,35 @@ HP ZBook Power G10（i7-13700H / Raptor Lake-H）在 macOS 26.7.1 上的完整�
 
 ---
 
-## 2. 硬件支持总表
+## 2. 系统截图
+
+> 截图中的序列号 / UUID / 用户名 / Wi-Fi 名称已做模糊处理。
+
+<details>
+<summary><b>点开查看截图</b></summary>
+
+| | |
+|---|---|
+| ![硬件概览](docs/images/about-this-mac.png) | ![显示器](docs/images/displays.png) |
+| *系统信息 · 硬件概览（i7-13700H / 16GB / UHD 1536MB）* | *显示器 · 内屏 1920×1080 60Hz 正常输出* |
+| ![触控板](docs/images/trackpad.png) | ![蓝牙](docs/images/bluetooth.png) |
+| *触控板 · ELAN07BB 经 VoodooI2C 正常识别* | *蓝牙 · Intel AX211 蓝牙可用* |
+| ![Wi-Fi](docs/images/wifi.png) | ![声音](docs/images/sound.png) |
+| *Wi-Fi · AX211 已连接* | *声音 · VoodooHDA 扬声器/耳机* |
+| ![终端验证](docs/images/terminal-proof.png) | |
+| *终端验证 · 驱动版本 / edp-keep 4/4 / boot-args* | |
+
+</details>
+
+---
+
+## 3. 硬件支持总表
 
 | 硬件 | 型号 / ID | 状态 | 实现方式 |
 |---|---|---|---|
 | CPU | i7-13700H | ✅ 20 线程（6P/8E 拓扑修正） | `CpuTopologyRebuild` + `SSDT-PLUG-ALT` |
 | 核显 | UHD `0xA720` | ✅ Metal 2，VRAM 1536 MB | `WhateverXe` 0.7.0 + `AppleIntelTGLCompat` |
-| **内屏** | 1920×1080 eDP | ✅ 点亮（关键：`-wex-edp-keep`） | 见 [§4.1](#41-内屏eDP点亮最大的坑) |
+| **内屏** | 1920×1080 eDP | ✅ 点亮（关键：`-wex-edp-keep`） | 见 [§5.1](#51-内屏eDP点亮最大的坑) |
 | 触摸板 | ELAN07BB（I2C HID） | ✅ 顺滑（轮询模式） | `VoodooI2C` 2.9.1 + `VoodooI2CHID` + `-vi2c-force-polling` |
 | 键盘 | PS/2 | ✅ 含亮度键 | `VoodooPS2Controller` 2.3.8 + `BrightnessKeys` |
 | Wi-Fi | Intel Wi-Fi 6E AX211（`8086:51ef`，CNVi） | ✅ 自动连接 | `AirportItlwm` 2.4.0 + 开机守护脚本 |
@@ -45,17 +67,19 @@ HP ZBook Power G10（i7-13700H / Raptor Lake-H）在 macOS 26.7.1 上的完整�
 | USB | — | ✅ 端口定制正常 | `USBToolBox` + `UTBDefault` + `SSDT-USBX` |
 | 读卡器 | Card Reader | ⚠️ 未验证/未驱动 | — |
 | 指纹识别 | — | ❌ 无解（macOS 不支持第三方指纹） | — |
-| **睡眠** | — | ❌ 主动禁用 | 见 [§5](#5-已知限制) |
+| **睡眠** | — | ❌ 主动禁用 | 见 [§6](#6-已知限制) |
 
 ---
 
-## 3. 项目结构
+## 4. 项目结构
 
 ```
 .
 ├── README.md
 ├── docs/
-│   └── internal-display-fix.md    # 内屏修复的技术细节（AUX 超时 / DPCD / edp-keep）
+│   ├── internal-display-fix.md    # 内屏修复的技术细节（AUX 超时 / DPCD / edp-keep）
+│   ├── build-from-source.md       # 从源码构建 edp-keep 版驱动（含补丁与部署流程）
+│   └── images/                    # 系统截图
 ├── efi/
 │   └── OC/
 │       ├── config.plist           # 已清除序列号的公开版本
@@ -65,13 +89,13 @@ HP ZBook Power G10（i7-13700H / Raptor Lake-H）在 macOS 26.7.1 上的完整�
     └── com.jeff.wififix.plist     # 对应 LaunchDaemon
 ```
 
-> 本仓库**不包含**第三方 kext 二进制文件，只列版本与来源（见 [§6](#6-kext-清单)）。请从各项目官方 Release 下载。
+> 本仓库**不包含**第三方 kext 二进制文件，只列版本与来源（见 [§7](#7-kext-清单)）。请从各项目官方 Release 下载。
 
 ---
 
-## 4. 关键实现说明
+## 5. 关键实现说明
 
-### 4.1 内屏（eDP）点亮：最大的坑
+### 5.1 内屏（eDP）点亮：最大的坑
 
 **症状**：开机跑码阶段内屏正常显示，macOS 驱动接管瞬间变黑；手电筒照屏幕**有背光、无画面**，外接显示器正常。
 
@@ -101,7 +125,7 @@ ioreg -l | grep WEXEDPKeep
 
 日志中不再出现 `Hardware mode set failed`，内屏点亮且 Metal 加速正常。
 
-### 4.2 触摸板：突停突跳
+### 5.2 触摸板：突停突跳
 
 **症状**：光标移动时突然卡住，然后一次跳到很远处。
 
@@ -118,7 +142,7 @@ ioreg -l | grep WEXEDPKeep
 
 代价是极小的 CPU 占用（8 ms 报告周期），换来完全稳定的手感。
 
-### 4.3 Wi-Fi：重启后必须手动开关
+### 5.3 Wi-Fi：重启后必须手动开关
 
 **症状**：每次重启后 Wi-Fi 图标是灰的，手动关一下再开就正常。
 
@@ -134,12 +158,12 @@ sudo chown root:wheel /Library/LaunchDaemons/com.jeff.wififix.plist
 sudo launchctl bootstrap system /Library/LaunchDaemons/com.jeff.wififix.plist
 ```
 
-### 4.4 音频：VoodooHDA 而非 AppleALC
+### 5.4 音频：VoodooHDA 而非 AppleALC
 
 macOS Tahoe 移除了 `AppleHDA.kext`，`AppleALC` 无法直接工作，改用 `VoodooHDA`。
 安装后需在「系统设置 → 声音 → 输出」选择 **Speaker (Analog)**。
 
-### 4.5 蓝牙
+### 5.5 蓝牙
 
 Intel AX211 的蓝牙走 USB，需要三个 kext 配合：
 
@@ -151,7 +175,7 @@ Intel AX211 的蓝牙走 USB，需要三个 kext 配合：
 
 ---
 
-## 5. 已知限制
+## 6. 已知限制
 
 | 限制 | 说明 | 规避 |
 |---|---|---|
@@ -163,7 +187,7 @@ Intel AX211 的蓝牙走 USB，需要三个 kext 配合：
 
 ---
 
-## 6. Kext 清单
+## 7. Kext 清单
 
 | Kext | 版本 | 来源 |
 |---|---|---|
@@ -187,7 +211,7 @@ Intel AX211 的蓝牙走 USB，需要三个 kext 配合：
 | VoodooHDA | 3.0.2 | [chris1111/VoodooHDA-Tahoe](https://github.com/chris1111) |
 | USBToolBox / UTBDefault | 1.2.0 | [USBToolBox](https://github.com/USBToolBox/kext) |
 
-## 7. SSDT 清单
+## 8. SSDT 清单
 
 | SSDT | 作用 |
 |---|---|
@@ -204,7 +228,7 @@ Intel AX211 的蓝牙走 USB，需要三个 kext 配合：
 
 ---
 
-## 8. boot-args 逐项说明
+## 9. boot-args 逐项说明
 
 | 参数 | 作用 |
 |---|---|
@@ -221,20 +245,22 @@ Intel AX211 的蓝牙走 USB，需要三个 kext 配合：
 
 ---
 
-## 9. 使用说明
+## 10. 使用说明
 
 1. **不要直接使用仓库里的 `config.plist` 启动**：其中的序列号已替换为占位符
    （`REPLACE-WITH-YOUR-SERIAL` / `REPLACE-WITH-YOUR-MLB`），必须用
    [GenSMBIOS](https://github.com/corpnewt/GenSMBIOS) 生成自己的 `MacBookPro16,2` 三码
-2. 把 `efi/` 下的内容放入 EFI 分区（`EFI/OC/`），kext 按 §6 的版本自行下载放入 `EFI/OC/Kexts/`
-3. 安装 `scripts/wifi-fix.sh` 守护（见 §4.3）
+2. 把 `efi/` 下的内容放入 EFI 分区（`EFI/OC/`），kext 按 §7 的版本自行下载放入 `EFI/OC/Kexts/`
+3. 安装 `scripts/wifi-fix.sh` 守护（见 §5.3）
 4. 首次启动建议保留 `-v`，出问题看 `log show --predicate 'process == "kernel"'`
+5. 内屏修复的 edp-keep 版 WhateverXe 需自行编译，见
+   [docs/build-from-source.md](docs/build-from-source.md)
 
 > ⚠️ 本仓库仅为个人机器配置记录，不构成安装指导。黑苹果有风险，操作前请备份。
 
 ---
 
-## 10. 致谢
+## 11. 致谢
 
 - [WhateverXe](https://github.com/b00t0x/WhateverXe) —— Raptor Lake 核显驱动
 - [nickk19](https://github.com/nickk19/WhateverXe) —— `-wex-edp-keep` 补丁
