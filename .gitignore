@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+._*
+
+# 本地生成的 EFI / 备份，不要提交
+*.bak
+*.bak-*
+*.orig
+EFI/
+!efi/
+
+# 临时文件
+*.log
+*.tmp
