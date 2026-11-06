@@ -52,7 +52,7 @@ HP ZBook Power G10（i7-13700H / Raptor Lake-H）在 macOS 26.7.1 上的完整�
 
 | 硬件 | 型号 / ID | 状态 | 实现方式 |
 |---|---|---|---|
-| CPU | i7-13700H | ✅ 20 线程（6P/8E 拓扑修正） | `CpuTopologyRebuild` + `SSDT-PLUG-ALT` |
+| CPU | i7-13700H | ✅ 20 线程（6P/8E 拓扑修正），单核睿频约 3.7–3.9GHz | `CpuTopologyRebuild` + `SSDT-PLUG-ALT` + `CPUFriend`（见 [§5.6](#56-cpu-睿频被-smbios-借用的频率表)） |
 | 核显 | UHD `0xA720` | ✅ Metal 2，VRAM 1536 MB | `WhateverXe` 0.7.0 + `AppleIntelTGLCompat` |
 | **内屏** | 1920×1080 eDP | ✅ 点亮（关键：`-wex-edp-keep`） | 见 [§5.1](#51-内屏eDP点亮最大的坑) |
 | 触摸板 | ELAN07BB（I2C HID） | ✅ 顺滑（轮询模式） | `VoodooI2C` 2.9.1 + `VoodooI2CHID` + `-vi2c-force-polling` |
@@ -79,6 +79,7 @@ HP ZBook Power G10（i7-13700H / Raptor Lake-H）在 macOS 26.7.1 上的完整�
 ├── docs/
 │   ├── internal-display-fix.md    # 内屏修复的技术细节（AUX 超时 / DPCD / edp-keep）
 │   ├── build-from-source.md       # 从源码构建 edp-keep 版驱动（含补丁与部署流程）
+│   ├── cpu-turbo.md               # CPU 睿频：频率表借用、CPUFriend 与实测数据
 │   └── images/                    # 系统截图
 ├── efi/
 │   └── OC/
@@ -173,6 +174,39 @@ Intel AX211 的蓝牙走 USB，需要三个 kext 配合：
 | `IntelBTPatcher` 2.5.2 | 修补 Intel 蓝牙协议栈 |
 | `BlueToolFixup` 2.7.3 | 修复 macOS 12+ 蓝牙工具链 |
 
+### 5.6 CPU 睿频：被 SMBIOS 借用的频率表
+
+**症状**：「关于本机」显示 2.92GHz，满载实测封顶 **3.8GHz**（i7-13700H 规格单核 5.0GHz）。
+
+**根因**：SMBIOS 用 `MacBookPro16,2`，macOS 于是加载该机型资源表
+`Mac-5F9802EFE386AA28.plist`——它属于 **Ice Lake i7-1068NG7**（规格恰好全核 3.8 / 单核 4.1GHz），
+XCPM 的 `hard_plimit_max_100mhz_ratio` 被压在 **38**（3.8GHz）。黑苹果上 CPU 未被真正识别，
+macOS 只能照抄别人的频率表。
+
+**解决**：`CPUFriend` + 定制 `CPUFriendDataProvider`，把频率表换成规格最接近的
+`MacBookPro16,1`（i9-9980HK，P 核 2.4GHz 基频 / 5.0GHz 睿频）的版本——新增 4300/4600/5000 三档：
+
+```bash
+# 1. CPUFriend 官方 Tools 里转换资源表
+sh Tools/ResourceConverter.sh --kext Mac-AA95B1DDAB278B95.plist   # 产出 CPUFriendDataProvider.kext
+# 2. 两个 kext 进 EFI/OC/Kexts，config 的 Kernel → Add 里排在 Lilu 之后
+# 3. 关键：macOS 26 属于 CPUFriend 未声明支持的版本，必须加 -cpufbeta
+```
+
+> ⚠️ **最容易踩的坑**：不加 `-cpufbeta` 时 RELEASE 版 CPUFriend **静默不加载数据**，
+> 表现是 kext 已在 `kextstat` 里、但频率表毫无变化，极难察觉。判定方法：
+> ```bash
+> ioreg -l -n X86PlatformPlugin | grep -o '"Frequencies"={[^}]*}'
+> # 生效前：{"4100"=1,"3800"=1}      生效后：{"4300"=1,"4600"=2,"5000"=3,"4100"=0}
+> sysctl machdep.xcpm.hard_plimit_max_100mhz_ratio   # 38 → 50（=5.0GHz）
+> ```
+
+**效果与残留**：macOS 侧上限已开到 5.0GHz（硬限制 ratio 50、AC 供电、无热警告、封装功耗仅 13W），
+但实测**持续**频率仍在 ~3.7–3.9GHz（自写 AVX2 FMA 基准 ≈111 GFLOPS 交叉验证，非显示误差）。
+推断瓶颈在更底层——`Cpuid1Data` 把 CPU 伪装成 `0x000A0655`（Comet Lake）后，HWP/EPP 层
+仍按伪装的机型调频。深调（DEBUG 版 CPUFriend + EPP 注入 / 换仿冒 ID）风险高、收益不确定，
+本项目保持现状。详细测量过程见 [docs/cpu-turbo.md](docs/cpu-turbo.md)。
+
 ---
 
 ## 6. 已知限制
@@ -181,6 +215,7 @@ Intel AX211 的蓝牙走 USB，需要三个 kext 配合：
 |---|---|---|
 | **睡眠 / 关屏 / 切换分辨率** | 会触发完整 modeset → 内屏黑到下次重启 | 电源设置里关闭睡眠；不要手动关屏或改分辨率 |
 | NVMe 偶发死机 | Samsung PM991a/PM9A1 写超时（Windows 下也有报告），非 macOS 问题 | 减少强制断电；重要数据勤备份 |
+| CPU 持续频率 | 睿频上限已开到 5.0GHz，但实测持续约 3.7–3.9GHz（伪装 CPUID 导致） | 无（见 [§5.6](#56-cpu-睿频被-smbios-借用的频率表)） |
 | 读卡器 | 未验证 | 用 USB 读卡器 |
 | 指纹 | macOS 无第三方指纹驱动 | — |
 | 系统升级 | 大版本升级可能破坏驱动栈 | 升级前备份 EFI |
@@ -196,6 +231,7 @@ Intel AX211 的蓝牙走 USB，需要三个 kext 配合：
 | AppleIntelTGLCompat | 0.7.0 | 同上（PlugIn） |
 | VirtualSMC / SMCProcessor / SMCSuperIO / SMCBatteryManager / SMCLightSensor | 1.3.9 | [acidanthera/VirtualSMC](https://github.com/acidanthera/VirtualSMC) |
 | CpuTopologyRebuild | 2.0.2 | [b00t0x/CpuTopologyRebuild](https://github.com/b00t0x/CpuTopologyRebuild) |
+| CPUFriend / CPUFriendDataProvider | 1.2.9 | [acidanthera/CPUFriend](https://github.com/acidanthera/CPUFriend)（自制 DataProvider） |
 | AMFIPass | 1.4.1 | [dhinakg/AMFIPass](https://github.com/dhinakg/AMFIPass) |
 | RestrictEvents | 1.1.7 | [acidanthera/RestrictEvents](https://github.com/acidanthera/RestrictEvents) |
 | NVMeFix | 1.1.4 | [acidanthera/NVMeFix](https://github.com/acidanthera/NVMeFix) |
@@ -242,6 +278,7 @@ Intel AX211 的蓝牙走 USB，需要三个 kext 配合：
 | `-wex-memclamp` / `-wex-dpsrc-lax` / `-igfxdvmt` | 显存与 DP 源宽松匹配 |
 | **`-wex-edp-keep`** | **复用固件训练好的 eDP 链路（内屏点亮关键）** |
 | **`-vi2c-force-polling`** | **触摸板强制轮询（解决突停突跳）** |
+| `-cpufbeta` | 让 CPUFriend 在未声明支持的 macOS 版本上生效（**必需**，见 §5.6） |
 
 ---
 
