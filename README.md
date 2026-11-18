@@ -4,6 +4,8 @@ HP ZBook Power G10（i7-13700H / Raptor Lake-H）在 macOS 26.7.1 上的完整�
 
 内屏（eDP）、触摸板、Wi-Fi、蓝牙、音频、电池、摄像头、USB 全部可用；睡眠不可用（原因与取舍见下文）。
 
+除了「哪些能跑」，本仓库还记录了**怎么把它重装出来**：双分区离线启动盘、三步装机脚本、以及每次装机自动发放独立 SMBIOS 身份的机制（见 [§6](#6-装机流程双分区离线盘--三步装机) / [§7](#7-身份smbios一机一号自动发号)）。
+
 ![macOS](https://img.shields.io/badge/macOS-26.7.1%20(25G241)-black)
 ![OpenCore](https://img.shields.io/badge/OpenCore-1.0.9-blue)
 ![SMBIOS](https://img.shields.io/badge/SMBIOS-MacBookPro16%2C2-lightgrey)
@@ -54,11 +56,12 @@ HP ZBook Power G10（i7-13700H / Raptor Lake-H）在 macOS 26.7.1 上的完整�
 |---|---|---|---|
 | CPU | i7-13700H | ✅ 20 线程（6P/8E 拓扑修正），单核睿频约 3.7–3.9GHz | `CpuTopologyRebuild` + `SSDT-PLUG-ALT` + `CPUFriend`（见 [§5.6](#56-cpu-睿频被-smbios-借用的频率表)） |
 | 核显 | UHD `0xA720` | ✅ Metal 2，VRAM 1536 MB | `WhateverXe` 0.7.0 + `AppleIntelTGLCompat` |
-| **内屏** | 1920×1080 eDP | ✅ 点亮（关键：`-wex-edp-keep`） | 见 [§5.1](#51-内屏eDP点亮最大的坑) |
+| **内屏** | 1920×1080 eDP | ✅ 点亮（关键：`-wex-edp-keep`） | 见 [§5.1](#51-内屏edp点亮最大的坑) |
 | 触摸板 | ELAN07BB（I2C HID） | ✅ 顺滑（轮询模式） | `VoodooI2C` 2.9.1 + `VoodooI2CHID` + `-vi2c-force-polling` |
 | 键盘 | PS/2 | ✅ 含亮度键 | `VoodooPS2Controller` 2.3.8 + `BrightnessKeys` |
 | Wi-Fi | Intel Wi-Fi 6E AX211（`8086:51ef`，CNVi） | ✅ 自动连接 | `AirportItlwm` 2.4.0 + 开机守护脚本 |
 | 蓝牙 | Intel AX211 BT（USB `8087:0033`） | ✅ 可用 | `IntelBluetoothFirmware` + `IntelBTPatcher` + `BlueToolFixup` |
+| AirDrop / 接力 | — | ❌ 不可用 | `AirportItlwm` 不实现 AWDL，AX211 无 AirDrop 通路（见 §8） |
 | 有线网卡 | Intel I219-LM（`8086:51a4`） | ✅ 可用 | `IntelMausiEthernet` 3.0.3 |
 | 音频 | 板载（VoodooHDA） | ✅ 扬声器 + 耳机口 | `VoodooHDA` 3.0.2（Tahoe 无 AppleHDA，AppleALC 不可用） |
 | 电池 | 智能电池 | ✅ 电量/循环次数正常 | `SMCBatteryManager` + `ECEnabler` |
@@ -67,7 +70,7 @@ HP ZBook Power G10（i7-13700H / Raptor Lake-H）在 macOS 26.7.1 上的完整�
 | USB | — | ✅ 端口定制正常 | `USBToolBox` + `UTBDefault` + `SSDT-USBX` |
 | 读卡器 | Card Reader | ⚠️ 未验证/未驱动 | — |
 | 指纹识别 | — | ❌ 无解（macOS 不支持第三方指纹） | — |
-| **睡眠** | — | ❌ 主动禁用 | 见 [§6](#6-已知限制) |
+| **睡眠** | — | ❌ 主动禁用 | 见 §8 |
 
 ---
 
@@ -90,7 +93,7 @@ HP ZBook Power G10（i7-13700H / Raptor Lake-H）在 macOS 26.7.1 上的完整�
     └── com.jeff.wififix.plist     # 对应 LaunchDaemon
 ```
 
-> 本仓库**不包含**第三方 kext 二进制文件，只列版本与来源（见 [§7](#7-kext-清单)）。请从各项目官方 Release 下载。
+> 本仓库**不包含**第三方 kext 二进制文件，只列版本与来源（见 [§9](#9-kext-清单)）。请从各项目官方 Release 下载。
 
 ---
 
@@ -209,7 +212,121 @@ sh Tools/ResourceConverter.sh --kext Mac-AA95B1DDAB278B95.plist   # 产出 CPUFr
 
 ---
 
-## 6. 已知限制
+## 6. 装机流程：双分区离线盘 + 三步装机
+
+> 装机脚本（`wex-onboard` / `identity`）属于个人装机包，未随仓库分发。这里记录的是**可复现的流程与关键判断**，配合本仓库的 `efi/OC` 与 `scripts/` 即可自行还原。
+
+### 6.1 启动盘布局：双分区，断网也能装完
+
+| 分区 | 格式 | 容量 | 内容 |
+|---|---|---|---|
+| `OC` | FAT32 | 8 GB | `EFI/`（OpenCore + kext + config）、`com.apple.recovery.boot/`（`BaseSystem.dmg` 916 MB）、`wex-onboard/`（装机脚本）、`identity/`（发号工具 + 台账） |
+| `INSTALLER` | exFAT | 剩余容量 | `InstallAssistant-25G241.pkg`（17.1 GB）+ `install-macos.sh` 等辅助脚本 |
+
+约 19 GB 内容一次写入，装系统全程不需要网络。精简版可以只保留 `OC` 分区那 1 GB 载荷，装机时由恢复分区联网下载 macOS（约 15 GB 流量）。
+
+两个硬约束决定了这个布局：
+
+- 固件只认 FAT32 分区根目录下的 `EFI/BOOT/BOOTx64.efi`
+- 恢复分区要求 `com.apple.recovery.boot/BaseSystem.dmg` 位于**分区根目录**
+
+这两件事可以共存于同一个分区，所以「引导 + 恢复」用一个 8 GB 的 FAT32 就够；单独开 INSTALLER 分区只是为了放得下 17 GB 的离线安装包（FAT32 单文件上限 4 GB）。
+
+### 6.2 三步装机
+
+```bash
+# ① 写入 EFI 到内置硬盘 ESP（自动备份旧 EFI + 自动发放本机身份）
+sudo sh /Volumes/OC/wex-onboard/install.sh          # 目标分区默认 disk0s1
+#    强制换新号：sudo WEX_NEWID=force sh install.sh
+#    跳过发号：  sudo WEX_NEWID=off   sh install.sh
+
+# ② 重启进系统后：身份自检 + 核显/声卡驱动 + 电源 + Wi-Fi 守护
+sudo sh /Volumes/OC/wex-onboard/postinstall.sh
+
+# ③ 再重启两次（AuxKC 重建需要），然后验收
+sudo sh /Volumes/OC/wex-onboard/verify.sh
+```
+
+**更稳的时点**：在安装器里等系统装完、**首次重启之前**，用「实用工具 → 终端」直接跑 `install.sh`。这样第一次进系统就已经是新身份，安装向导里可以直接登录自己的 Apple ID。若等进了系统才跑，则重启生效前不要登录 Apple ID——否则 Apple 侧记住的是模板里的旧号。
+
+`postinstall.sh` 的六步：
+
+| 步骤 | 做什么 |
+|---|---|
+| 0/6 | **身份自检**：比对「启动时实际加载的序列号」与「EFI 里的序列号」，未登记则补发并提示重启生效 |
+| 1/6 | 核显驱动组 `AppleIntelTGL*` 装进 `/Library/Extensions` |
+| 2/6 | VoodooHDA 声卡驱动 |
+| 3/6 | `kmutil install --update-all` 重建 AuxKC（1–3 分钟，报错就重启后再跑一遍） |
+| 4/6 | 电源设置（关睡眠）+ 默认音频输出设为扬声器 |
+| 5/6 | 装 `wifi-fix.sh` + LaunchDaemon，治「重启后 Wi-Fi 灰」（见 [§5.3](#53-wi-fi重启后必须手动开关)） |
+| 6/6 | 收尾，打印验收命令 |
+
+`verify.sh` 逐项核对：身份（启动序列号 / EFI 内序列号 / 台账状态）、Metal 2、内屏 `WEXEDPKeep` 计数、睿频硬限制、音频输出、触摸板、Wi-Fi 守护、电源设置。
+
+---
+
+## 7. 身份（SMBIOS）：一机一号，自动发号
+
+### 7.1 为什么不能两台机同号
+
+SMBIOS 三码是 OpenCore 在**启动时注入**的，不是装完系统再改的——EFI 里的 `config.plist` 就决定了这台机器对外报什么身份。两台同型号机器共用一套号，会出现 iMessage / FaceTime 互相踢线、App Store 授权异常，也是 Apple 风控最容易识别的特征。
+
+这也解释了发号为什么必须发生在**写 EFI 的那一刻**：装完系统再改 config，机器已经用旧号注册过；而 `postinstall.sh` 里的身份检查只是兜底核对，不能替代写盘时发号。
+
+### 7.2 一套身份的四个字段
+
+| 字段 | 生成方式 |
+|---|---|
+| `SystemSerialNumber` | OpenCore 官方 `macserial` 生成（与 MLB 成对匹配、校验位正确） |
+| `MLB` | 同上——同批生成，**不能单独换** |
+| `SystemUUID` | `uuidgen` |
+| `ROM` | 随机 MAC，第二字节置本地管理位（`x2` / `x6` / `xA` / `xE`） |
+
+机型固定 `MacBookPro16,2`（board-id `Mac-5F9802EFE386AA28`），**不要改**：改机型等于同时换掉资源表、CPUFriend 数据源和整套电源管理配置（[§5.6](#56-cpu-睿频被-smbios-借用的频率表)）。
+
+### 7.3 台账与冲突避免
+
+每次发放都追加一行到 `identity/identity-ledger.tsv`，序列号或 MLB 命中即重摇：
+
+| 生成时间 | 序列号 | MLB | UUID | ROM | 备注 | 状态 |
+|---|---|---|---|---|---|---|
+| 2026-11-06 20:14 | `C02C10PZ****` | `C0295390****` | `0E13C691-****` | `791e95d7****` | 本机自用 | 本机在用 |
+
+> 上面是打码后的示例行。真实台账留在 U 盘的 `identity/` 里，不进仓库——序列号 + MLB 是可直接被拿去冒充的身份。
+
+装机时的判定顺序：
+
+| 场景 | 行为 |
+|---|---|
+| 新机器（目标盘原本没有 EFI） | 摇一套新号，写入 EFI，登记台账 |
+| 同一台机器重装（目标盘 EFI 里的号已在台账） | **复用**，不换号 |
+| 克隆盘要装到另一台 | `WEX_NEWID=force` 强制换新号 |
+| 只想原样写入、不碰身份 | `WEX_NEWID=off` |
+
+> ⚠️ 台账就在 U 盘上，**U 盘丢了等于失去去重依据**，两台机器有可能撞号——建议单独备份一份 `identity-ledger.tsv`。
+
+### 7.4 一个必踩的坑：ROM 不能按 hex 写
+
+`ROM` 在 plist 里是 `<data>` 类型，两种「看起来对」的写法都会写坏：
+
+- `PlistBuddy -c "Set :PlatformInfo:Generic:ROM a1b2c3d4e5f6"` → 存成**字符串**，OpenCore 拒绝加载
+- `plutil -replace PlatformInfo.Generic.ROM -data a1b2c3d4e5f6` → `plutil` 把参数当 **base64** 解析，解出来是乱码字节
+
+正确做法是先把 hex 转成 base64，写完读回校验：
+
+```bash
+HEX=a1b2c3d4e5f6                                    # 6 字节随机 MAC，第二字节置本地管理位
+B64=$(printf "$HEX" | xxd -r -p | base64)
+plutil -replace PlatformInfo.Generic.ROM -data "$B64" config.plist
+plutil -convert binary1 config.plist                                        # 保持二进制格式
+plutil -extract PlatformInfo.Generic.ROM raw -o - config.plist | xxd -p     # 应回显 a1b2c3d4e5f6
+```
+
+发号脚本因此改成了**纯 `plutil` 实现**——安装器和恢复环境里没有 `python3`，`PlistBuddy` 又会写坏 data 字段，只有 `plutil` 在三种环境下都稳定可用。
+
+---
+
+## 8. 已知限制
 
 | 限制 | 说明 | 规避 |
 |---|---|---|
@@ -217,12 +334,13 @@ sh Tools/ResourceConverter.sh --kext Mac-AA95B1DDAB278B95.plist   # 产出 CPUFr
 | NVMe 偶发死机 | Samsung PM991a/PM9A1 写超时（Windows 下也有报告），非 macOS 问题 | 减少强制断电；重要数据勤备份 |
 | CPU 持续频率 | 睿频上限已开到 5.0GHz，但实测持续约 3.7–3.9GHz（伪装 CPUID 导致） | 无（见 [§5.6](#56-cpu-睿频被-smbios-借用的频率表)） |
 | 读卡器 | 未验证 | 用 USB 读卡器 |
+| **AirDrop / 接力** | `AirportItlwm` 只提供 Wi-Fi 数据通路，不实现 AWDL；AX211 在 macOS 下没有 AirDrop 通路（同卡原型补丁尚未发布） | 用 LocalSend、SMB/AFP 局域网共享，或直接 U 盘 |
 | 指纹 | macOS 无第三方指纹驱动 | — |
 | 系统升级 | 大版本升级可能破坏驱动栈 | 升级前备份 EFI |
 
 ---
 
-## 7. Kext 清单
+## 9. Kext 清单
 
 | Kext | 版本 | 来源 |
 |---|---|---|
@@ -247,7 +365,7 @@ sh Tools/ResourceConverter.sh --kext Mac-AA95B1DDAB278B95.plist   # 产出 CPUFr
 | VoodooHDA | 3.0.2 | [chris1111/VoodooHDA-Tahoe](https://github.com/chris1111) |
 | USBToolBox / UTBDefault | 1.2.0 | [USBToolBox](https://github.com/USBToolBox/kext) |
 
-## 8. SSDT 清单
+## 10. SSDT 清单
 
 | SSDT | 作用 |
 |---|---|
@@ -264,7 +382,7 @@ sh Tools/ResourceConverter.sh --kext Mac-AA95B1DDAB278B95.plist   # 产出 CPUFr
 
 ---
 
-## 9. boot-args 逐项说明
+## 11. boot-args 逐项说明
 
 | 参数 | 作用 |
 |---|---|
@@ -282,22 +400,24 @@ sh Tools/ResourceConverter.sh --kext Mac-AA95B1DDAB278B95.plist   # 产出 CPUFr
 
 ---
 
-## 10. 使用说明
+## 12. 使用说明
 
 1. **不要直接使用仓库里的 `config.plist` 启动**：其中的序列号已替换为占位符
-   （`REPLACE-WITH-YOUR-SERIAL` / `REPLACE-WITH-YOUR-MLB`），必须用
-   [GenSMBIOS](https://github.com/corpnewt/GenSMBIOS) 生成自己的 `MacBookPro16,2` 三码
-2. 把 `efi/` 下的内容放入 EFI 分区（`EFI/OC/`），kext 按 §7 的版本自行下载放入 `EFI/OC/Kexts/`
-3. 安装 `scripts/wifi-fix.sh` 守护（见 §5.3）
-4. 首次启动建议保留 `-v`，出问题看 `log show --predicate 'process == "kernel"'`
-5. 内屏修复的 edp-keep 版 WhateverXe 需自行编译，见
+   （`REPLACE-WITH-YOUR-SERIAL` / `REPLACE-WITH-YOUR-MLB`），必须先用
+   [GenSMBIOS](https://github.com/corpnewt/GenSMBIOS) 或自写脚本生成自己的 `MacBookPro16,2` 三码；
+   `ROM` 是 `<data>` 字段，务必按 [§7.4](#74-一个必踩的坑rom-不能按-hex-写) 的方式用 base64 写入
+2. 把 `efi/` 下的内容放入 EFI 分区（`EFI/OC/`），kext 按 [§9](#9-kext-清单) 的版本自行下载放入 `EFI/OC/Kexts/`
+3. 装机按 [§6](#6-装机流程双分区离线盘--三步装机) 走：写 EFI → `postinstall.sh` → 重启两次 → `verify.sh`
+4. `scripts/wifi-fix.sh` 守护（见 [§5.3](#53-wi-fi重启后必须手动开关)）已包含在 `postinstall.sh` 里，手动装可参照 §5.3
+5. 首次启动建议保留 `-v`，出问题看 `log show --predicate 'process == "kernel"' --last 5m`
+6. 内屏修复的 edp-keep 版 WhateverXe 需自行编译，见
    [docs/build-from-source.md](docs/build-from-source.md)
 
 > ⚠️ 本仓库仅为个人机器配置记录，不构成安装指导。黑苹果有风险，操作前请备份。
 
 ---
 
-## 11. 致谢
+## 13. 致谢
 
 - [WhateverXe](https://github.com/b00t0x/WhateverXe) —— Raptor Lake 核显驱动
 - [nickk19](https://github.com/nickk19/WhateverXe) —— `-wex-edp-keep` 补丁
