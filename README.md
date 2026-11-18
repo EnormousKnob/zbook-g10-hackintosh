@@ -426,6 +426,18 @@ plutil -extract PlatformInfo.Generic.ROM raw -o - config.plist | xxd -p     # �
 - [OpenIntelWireless](https://github.com/OpenIntelWireless) —— Wi-Fi / 蓝牙
 - [chris1111](https://github.com/chris1111) —— VoodooHDA Tahoe 安装器
 
+## 14. 支持作者
+
+如果这份配置记录帮你省下了几个通宵的排障时间，可以扫下方任意一个码请我喝杯咖啡。
+
+资助完全自愿，不影响任何内容的更新。提交 issue 纠错、补充机型测试结果、或者点一个 Star，同样是很实在的支持。
+
+| 支付宝 | 微信支付 |
+|:---:|:---:|
+| <a href="docs/images/donate-alipay.jpg"><img src="docs/images/donate-alipay.jpg" width="240" alt="支付宝收款码"></a> | <a href="docs/images/donate-wechat.jpg"><img src="docs/images/donate-wechat.jpg" width="240" alt="微信支付收款码"></a> |
+
+<sub>点击图片查看原图；手机端长按、桌面端右键另存后可扫码。</sub>
+
 ## License
 
 本仓库的文档与脚本采用 MIT 协议；各第三方 kext 遵循其各自许可证。
